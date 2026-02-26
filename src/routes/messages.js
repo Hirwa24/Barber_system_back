@@ -42,15 +42,17 @@ router.get('/conversations', auth, async (req, res) => {
         const messages = await Message.find({
             $or: [{ sender: req.managerId }, { receiver: req.managerId }]
         })
-        .populate('sender', 'fullName')
-        .populate('receiver', 'fullName')
+        .populate('sender', 'fullName role')
+        .populate('receiver', 'fullName role')
         .sort({ createdAt: -1 });
 
         // Group by the "other" person
         const conversations = {};
         messages.forEach(msg => {
-            const otherId = msg.sender._id.toString() === req.managerId ? msg.receiver._id.toString() : msg.sender._id.toString();
-            const otherName = msg.sender._id.toString() === req.managerId ? msg.receiver.fullName : msg.sender.fullName;
+            const amISender = msg.sender._id.toString() === req.managerId;
+            const other = amISender ? msg.receiver : msg.sender;
+            const otherId = other._id.toString();
+            const otherName = other.role === 'admin' ? 'Admin' : other.fullName;
             
             if (!conversations[otherId]) {
                 conversations[otherId] = {
