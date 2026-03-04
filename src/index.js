@@ -14,7 +14,20 @@ const loanRoutes = require('./routes/loans');
 
 const app = express();
 
-app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:3000', credentials: true }));
+const normalizeOrigin = (origin) => (origin || '').replace(/\/$/, '');
+const allowedOrigins = [
+	normalizeOrigin(process.env.CORS_ORIGIN || 'http://localhost:3000'),
+	'https://barbermanager.vercel.app'
+];
+
+app.use(cors({
+	origin(origin, callback) {
+		// Allow non-browser tools and same-origin requests with no Origin header.
+		if (!origin) return callback(null, true);
+		return callback(null, allowedOrigins.includes(normalizeOrigin(origin)));
+	},
+	credentials: true
+}));
 app.use(helmet());
 app.use(express.json());
 app.use(cookieParser());
