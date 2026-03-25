@@ -3,117 +3,138 @@ const { body, validationResult } = require('express-validator');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
-const crypto = require('crypto');
-const nodemailer = require('nodemailer');
 const Manager = require('../models/Manager');
+const auth = require('../middleware/auth');
 
 const router = express.Router();
 
-// Rate limiter: 5 attempts per 15 mins
 const authLimiter = rateLimit({
-	windowMs: 15 * 60 * 1000,
-	max: 5,
-	message: { message: 'Inshuro zageragejwe zarenze urugero, ongera nyuma yiminota 15' },
-	standardHeaders: true,
-	legacyHeaders: false,
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { message: 'Inshuro zageragejwe zarenze urugero, ongera nyuma yiminota 15' },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
-function sendVerificationEmail(to, code) {
-	const transporter = nodemailer.createTransport({
-		host: process.env.MAIL_HOST,
-		port: Number(process.env.MAIL_PORT || 587),
-		secure: false,
-		auth: { user: process.env.MAIL_USER, pass: process.env.MAIL_PASS },
-	});
-	return transporter.sendMail({
-		from: process.env.MAIL_FROM,
-		to,
-		subject: 'Komeza wemeze konti yawe',
-		text: `Kode yo kwemeza: ${code}`,
-		html: `<p>Muraho,</p><p>Kode yo kwemeza: <b>${code}</b></p>`,
-	});
+function signAuthToken(manager) {
+  return jwt.sign({ id: manager._id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRES || '30d',
+  });
 }
 
-router.post('/register', authLimiter, [
-	body('fullName').trim().isLength({ min: 2 }).escape(),
-	body('email').isEmail().normalizeEmail(),
-	body('phone').matches(/^(\+250|250|0)7\d{8}$/).withMessage('Nomero ya terefone ntabwo yemewe'),
-	body('salonName').trim().isLength({ min: 2 }).escape(),
-	body('password').isStrongPassword({ minLength: 8, minSymbols: 1, minUppercase: 1, minNumbers: 1, minLowercase: 1 })
-		.withMessage('Ijambo ryibanga rigomba kuba rikomeye (ibyibuze 8 chars, 1 uppercase, 1 symbol, 1 number)'),
-], async (req, res) => {
-	const errors = validationResult(req);
-	if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-	
-	const { fullName, email, phone, salonName, password } = req.body;
-	
-	try {
-		const exists = await Manager.findOne({ email });
-		if (exists) return res.status(409).json({ message: 'Imeli iriho' });
-		
-		const passwordHash = await bcrypt.hash(password, 10);
-		// Note: removed isVerified: true to allow verification flow if intended, or keep true if auto-verified
-		const manager = await Manager.create({ fullName, email, phone, salonName, passwordHash, isVerified: true });
-		
-		return res.status(201).json({ message: 'Iyandikisha ryakunze.' });
-	} catch (error) {
-		console.error('Register error:', error);
-		return res.status(500).json({ message: 'Habaye ikibazo kuri server' });
-	}
+function userPayload(manager) {
+  return {
+    id: manager._id,
+    fullName: manager.fullName,
+    email: manager.email,
+    salonName: manager.salonName,
+    address: manager.address || '',
+    phone: manager.phone,
+    photoUrl: manager.photoUrl || '',
+    role: manager.role,
+    createdByAdmin: Boolean(manager.createdByAdmin),
+    lastLoginAt: manager.lastLoginAt || null,
+  };
+}
+
+router.post(
+  '/login',
+  authLimiter,
+  [
+    body('email').isEmail().normalizeEmail().withMessage('Imeli ntabwo yemewe'),
+    body('password').notEmpty().withMessage('Ijambo ryibanga rigomba kuzuzwa'),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const { email, password } = req.body;
+    try {
+      const manager = await Manager.findOne({ email });
+      if (!manager) {
+        return res.status(404).json({
+          message: 'Account not found. Please contact Barber Management System admin.',
+        });
+      }
+
+      if (manager.role !== 'admin' && !manager.createdByAdmin) {
+        return res.status(403).json({
+          message: 'This account cannot sign in. Only users created by an admin can log in.',
+        });
+      }
+
+      const ok = await bcrypt.compare(password, manager.passwordHash);
+      if (!ok) return res.status(401).json({ message: 'Ibyinjijwe si byo' });
+
+      manager.lastLoginAt = new Date();
+      await manager.save();
+
+      const token = signAuthToken(manager);
+      return res.json({ token, user: userPayload(manager) });
+    } catch (error) {
+      console.error('Login error:', error);
+      return res.status(500).json({ message: 'Habaye ikibazo kuri server' });
+    }
+  }
+);
+
+router.get('/session', auth, async (req, res) => {
+  try {
+    const manager = await Manager.findById(req.managerId).select('-passwordHash');
+    if (!manager) return res.status(401).json({ message: 'Session is invalid' });
+    return res.json({ user: userPayload(manager) });
+  } catch (error) {
+    console.error('Session check error:', error);
+    return res.status(500).json({ message: 'Habaye ikibazo kuri server' });
+  }
 });
 
-router.post('/verify', authLimiter, [ 
-	body('email').isEmail().normalizeEmail(), 
-	body('code').isLength({ min: 6, max: 6 }).isNumeric() 
-], async (req, res) => {
-	const errors = validationResult(req);
-	if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+router.patch(
+  '/profile',
+  auth,
+  [
+    body('fullName').optional().trim().isLength({ min: 2 }).withMessage('Full name is required'),
+    body('email').optional().isEmail().normalizeEmail().withMessage('Valid email is required'),
+    body('phone').optional().trim().notEmpty().withMessage('Phone is required'),
+    body('salonName').optional().trim().isLength({ min: 2 }).withMessage('Salon name is required'),
+    body('address').optional().trim(),
+    body('photoUrl').optional().isString(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-	const { email, code } = req.body;
-	try {
-		const manager = await Manager.findOne({ email });
-		if (!manager) return res.status(404).json({ message: 'Ntibyabonetse' });
-		if (manager.isVerified) return res.json({ message: 'Konte yemejwe' });
-		if (manager.verificationCode !== code || !manager.verificationCodeExpires || manager.verificationCodeExpires < new Date()) {
-			return res.status(400).json({ message: 'Kode siyo cyangwa yararangiye' });
-		}
-		manager.isVerified = true;
-		manager.verificationCode = undefined;
-		manager.verificationCodeExpires = undefined;
-		await manager.save();
-		return res.json({ message: 'Konte yemejwe neza' });
-	} catch (error) {
-		console.error('Verify error:', error);
-		return res.status(500).json({ message: 'Habaye ikibazo kuri server' });
-	}
-});
+    try {
+      const manager = await Manager.findById(req.managerId);
+      if (!manager) return res.status(404).json({ message: 'User not found' });
 
-router.post('/login', authLimiter, [ 
-	body('email').isEmail().normalizeEmail().withMessage('Imeli ntabwo yemewe'), 
-	body('password').notEmpty().withMessage('Ijambo ryibanga rigomba kuzuzwa') 
-], async (req, res) => {
-	const errors = validationResult(req);
-	if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+      const { fullName, email, phone, salonName, address, photoUrl } = req.body;
 
-	const { email, password } = req.body;
-	try {
-		const manager = await Manager.findOne({ email });
-		if (!manager) return res.status(401).json({ message: 'Ibyinjijwe si byo' });
-		
-		const ok = await bcrypt.compare(password, manager.passwordHash);
-		if (!ok) return res.status(401).json({ message: 'Ibyinjijwe si byo' });
-		
-		const token = jwt.sign({ id: manager._id }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES || '1d' });
-		return res.json({ token, user: { id: manager._id, fullName: manager.fullName, email: manager.email, salonName: manager.salonName, phone: manager.phone, role: manager.role } });
-	} catch (error) {
-		console.error('Login error:', error);
-		return res.status(500).json({ message: 'Habaye ikibazo kuri server' });
-	}
-});
+      if (email && email !== manager.email) {
+        const existing = await Manager.findOne({ email, _id: { $ne: manager._id } });
+        if (existing) {
+          return res.status(409).json({ message: 'Another user already uses this email' });
+        }
+        manager.email = email;
+      }
 
-router.get('/google', (req, res) => {
-	// Placeholder: implement OAuth redirect in future
-	return res.status(501).json({ message: 'Google OAuth ntirashyirwamo' });
-});
+      if (typeof fullName === 'string') manager.fullName = fullName;
+      if (typeof phone === 'string') manager.phone = phone;
+      if (typeof salonName === 'string') manager.salonName = salonName;
+      if (typeof address === 'string') manager.address = address;
+      if (typeof photoUrl === 'string') manager.photoUrl = photoUrl;
+
+      await manager.save();
+
+      return res.json({
+        message: 'Profile updated successfully',
+        user: userPayload(manager),
+      });
+    } catch (error) {
+      console.error('Profile update error:', error);
+      return res.status(500).json({ message: 'Habaye ikibazo kuri server' });
+    }
+  }
+);
 
 module.exports = router;

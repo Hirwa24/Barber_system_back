@@ -5,8 +5,11 @@ const managerSchema = new mongoose.Schema({
 	email: { type: String, required: true, unique: true, lowercase: true },
 	phone: { type: String, required: true }, // +2507...
 	salonName: { type: String, required: true },
+	address: { type: String, default: '' },
 	passwordHash: { type: String, required: true },
+	createdByAdmin: { type: Boolean, default: false },
 	isVerified: { type: Boolean, default: false },
+	lastLoginAt: { type: Date, default: null },
 	verificationCode: { type: String },
 	verificationCodeExpires: { type: Date },
 	photoUrl: { type: String },
