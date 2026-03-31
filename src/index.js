@@ -19,6 +19,7 @@ const normalizeOrigin = (origin) => (origin || "").replace(/\/$/, "");
 const allowedOrigins = [
   normalizeOrigin(process.env.CORS_ORIGIN || "http://localhost:3000"),
   normalizeOrigin("https://barbermanager.vercel.app"),
+  "https://barber-management-system-git-main-maurices-projects-2d9ace8f.vercel.app",
 ];
 
 app.use(
