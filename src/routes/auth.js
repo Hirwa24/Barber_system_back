@@ -195,6 +195,21 @@ router.post(
       manager.passwordUpdatedAt = new Date();
       await manager.save();
 
+      // Notify Admin
+      try {
+        const adminUser = await Manager.findOne({ role: "admin" });
+        if (adminUser) {
+          const Message = require("../models/Message");
+          await Message.create({
+            sender: manager._id,
+            receiver: adminUser._id,
+            content: `Notification: Manager ${manager.fullName || manager.salonName || manager.email} has changed their password securely.`,
+          });
+        }
+      } catch (notifErr) {
+        console.error("Failed to notify admin:", notifErr);
+      }
+
       res.json({ message: "Password updated successfully" });
     } catch (error) {
       console.error("Password change error:", error);
