@@ -2,21 +2,10 @@ const express = require("express");
 const { body, validationResult } = require("express-validator");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const rateLimit = require("express-rate-limit");
 const Manager = require("../models/Manager");
 const auth = require("../middleware/auth");
 
 const router = express.Router();
-
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  message: {
-    message: "Inshuro zageragejwe zarenze urugero, ongera nyuma yiminota 15",
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
 
 function signAuthToken(manager) {
   return jwt.sign({ id: manager._id }, process.env.JWT_SECRET, {
@@ -41,7 +30,6 @@ function userPayload(manager) {
 
 router.post(
   "/login",
-  authLimiter,
   [
     body("email").isEmail().normalizeEmail().withMessage("Imeli ntabwo yemewe"),
     body("password").notEmpty().withMessage("Ijambo ryibanga rigomba kuzuzwa"),
